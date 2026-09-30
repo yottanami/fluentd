@@ -141,6 +141,8 @@ module Fluent::Plugin
         @current_paths = {}
         @rate_period = rate_period
         @limit = limit
+        @number_lines_read = 0
+        @start_reading_time = nil
       end
 
       def add(path)
@@ -161,10 +163,12 @@ module Fluent::Plugin
 
       def update_reading_time(path)
         @current_paths[path].start_reading_time ||= Fluent::Clock.now
+        @start_reading_time ||= Fluent::Clock.now
       end
 
       def update_lines_read(path, value)
         @current_paths[path].number_lines_read += value
+        @number_lines_read += value
       end
 
       def reset_counter(path)
@@ -180,20 +184,27 @@ module Fluent::Plugin
         time_spent_reading(path) < @rate_period
       end
 
+      # The limit applies to the total number of lines read from all files
+      # in the group within rate_period.
       def limit_lines_reached?(path)
         return true unless include?(path)
         return true if @limit == 0
 
         return false if @limit < 0
-        return false if @current_paths[path].number_lines_read < @limit / size
+        return false if @number_lines_read < @limit
 
-        # update_reading_time(path)
-        if limit_time_period_reached?(path) # Exceeds limit
+        if Fluent::Clock.now - @start_reading_time < @rate_period # Exceeds limit
           true
         else # Does not exceed limit
-          reset_counter(path)
+          reset_group_counter
           false
         end
+      end
+
+      def reset_group_counter
+        @start_reading_time = nil
+        @number_lines_read = 0
+        @current_paths.each_key { |p| reset_counter(p) }
       end
 
       def to_s

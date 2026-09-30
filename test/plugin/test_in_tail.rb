@@ -2836,6 +2836,33 @@ class TailInputTest < Test::Unit::TestCase
     end
   end
 
+  sub_test_case "throttling logs of multiple files in a group" do
+    data("group total under the limit is read fully" => [[9, 1], 10, 10],
+         "group total over the limit is capped at the limit" => [[15, 5], 10, 10])
+    test "limit applies to the total number of lines of the group" do |(lines_per_file, limit, expected)|
+      files = ["podname1_namespace12_container-123456.log", "podname2_namespace12_container-654321.log"]
+      # Each line fills one read of in_tail, so the limit is checked after every line
+      msg = "a" * (Fluent::Plugin::TailInput::TailWatcher::IOHandler::BYTES_TO_READ - 1)
+      files.zip(lines_per_file).each do |file, num_lines|
+        Fluent::FileWrapper.open("#{@tmp_dir}/#{file}", "wb") do |f|
+          num_lines.times { f.puts msg }
+        end
+      end
+
+      rule = create_rule_directive({ "namespace" => "/namespace.+/" }, limit)
+      # rate_period is longer than the test, so the limit never resets while running
+      group = create_group_directive(tailing_group_pattern, "60s", rule)
+      conf = ROOT_CONFIG + group + create_path_element("podname*.log") + CONFIG_READ_FROM_HEAD + SINGLE_LINE_CONFIG
+
+      d = create_driver(conf, false)
+      d.run(timeout: 10) do
+        sleep 3
+      end
+
+      assert_equal(expected, d.record_count)
+    end
+  end
+
   sub_test_case "Update watchers for rotation with follow_inodes" do
     def test_updateTW_before_refreshTW_and_detach_before_refreshTW
       config = config_element(
